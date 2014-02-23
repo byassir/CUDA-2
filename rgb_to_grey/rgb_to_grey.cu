@@ -23,6 +23,42 @@ void check(T err, const char* const func, const char* const file, const int line
     }
 }
 
+struct GpuTimer
+{
+  cudaEvent_t start;
+  cudaEvent_t stop;
+
+  GpuTimer()
+  {
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+  }
+
+  ~GpuTimer()
+  {
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+  }
+
+  void Start()
+  {
+    cudaEventRecord(start, 0);
+  }
+
+  void Stop()
+  {
+    cudaEventRecord(stop, 0);
+  }
+
+  float Elapsed()
+  {
+    float elapsed;
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&elapsed, start, stop);
+    return elapsed;
+  }
+};
+
 cv::Mat imageRGBA;
 cv::Mat imageGrey;
 
@@ -82,11 +118,14 @@ int main(int argc, char **argv)
 	int g_y = ((32 - (imageRGBA.rows % 32)) + imageRGBA.rows) / 32;
 
 	int b_x = 32;
-	int b_y = 32;
+	int b_y = 32; //Max Threads per block is 1024, so 32x32
 
 	//Ready to launch the kernel
+	GpuTimer timer;
+	timer.Start();
 	kernel_rgb_to_grey <<< dim3(g_x,g_y,1),dim3(b_x,b_y,1) >>> (d_imgRGBA, d_imgGrey, imageRGBA.cols, imageRGBA.rows);
-
+	timer.Stop();
+	std::cout << "Your code ran in: " << timer.Elapsed() << " msecs." << std::endl;
 	//Copy Memory from GPU to Host
 	checkCudaErrors(cudaMemcpy(h_imgGrey, d_imgGrey, numPixels * sizeof(unsigned char), cudaMemcpyDeviceToHost));
 

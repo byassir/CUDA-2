@@ -1,3 +1,15 @@
+/*
+  Author: Faiz Ilahi Kothari
+  email: faiz.off93@gmail.com
+  Date modified: 24/02/2014
+  Description: Converts any image to greyscale. Intensity computed according to weights.
+  			   Optimal Blocksize chosen. Converts a 9372X9372 (14.0 MB) image to greyscale in 54 millisec.
+  			   Per block max no. of threads are 1024. In my case 16X16 block size is optimal.
+  			   4X faster than the internal OpenCV conversion.
+  Credits: Udacity
+
+  TODO:
+ */
 #include <iostream>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/core/core.hpp>
@@ -8,9 +20,13 @@
 #include <cstdlib>
 #include <string>
 #include <iomanip>
+#include <time.h>
 
-//#define DIMCOLS 557
-//#define DIMROWS 313
+#define BLOCK_X 16 //Optimal Block size in X for this code
+#define BLOCK_Y 16 //Optimal Block size in Y for this code
+#define WEIGHT_RED 0.299f 
+#define WEIGHT_GREEN 0.587f   //Eyes most sensitive to green and least to blue. Alpha channel is ignored
+#define WEIGHT_BLUE 0.114f
 
 #define checkCudaErrors(val) check( (val), #val, __FILE__, __LINE__)
 
@@ -23,7 +39,7 @@ void check(T err, const char* const func, const char* const file, const int line
     }
 }
 
-struct GpuTimer
+struct GpuTimer //Timer to calculate the time taken by the kernel to execute
 {
   cudaEvent_t start;
   cudaEvent_t stop;
@@ -59,21 +75,23 @@ struct GpuTimer
   }
 };
 
-cv::Mat imageRGBA;
-cv::Mat imageGrey;
+//KERNEL CODE
 
-__global__ void kernel_rgb_to_grey(uchar4 *imgRGBA, unsigned char *imgGrey, int numCols, int numRows)
+__global__ void kernel_rgb_to_grey(uchar4 *imgRGBA, unsigned char *imgGrey, int numCols, int numRows) 
 {
-	int pixel_x = (blockDim.x * blockIdx.x) + threadIdx.x;
-	int pixel_y = (blockDim.y * blockIdx.y) + threadIdx.y;
-
+	int pixel_x = ((blockDim.x * blockIdx.x) + threadIdx.x);
+	int pixel_y = ((blockDim.y * blockIdx.y) + threadIdx.y);
+	int pos = (pixel_y * numCols) + pixel_x;
 	if((pixel_x < numCols) && (pixel_y < numRows)){
-		imgGrey[(pixel_y * numCols) + pixel_x] = (0.299f * imgRGBA[(pixel_y * numCols) + pixel_x].x + 0.587f * imgRGBA[(pixel_y * numCols) + pixel_x].y + 0.114f * imgRGBA[(pixel_y * numCols) + pixel_x].z );
+		imgGrey[pos] = (WEIGHT_RED * imgRGBA[pos].x + WEIGHT_GREEN * imgRGBA[pos].y + WEIGHT_BLUE * imgRGBA[pos].z );
 	}
 }
 
 int main(int argc, char **argv)
 {
+	cv::Mat imageRGBA;
+	cv::Mat imageGrey;
+
 	if (argc != 3){
 		std::cout << "Wrong no. of arguments!\n" << std::endl;
 		exit(1);
@@ -114,11 +132,11 @@ int main(int argc, char **argv)
 	checkCudaErrors(cudaMemcpy(d_imgRGBA, h_imgRGBA, numPixels * sizeof(uchar4), cudaMemcpyHostToDevice));
 
 	//Compute the dimensions of grid and blocks
-	int g_x = ((32 - (imageRGBA.cols % 32)) + imageRGBA.cols) / 32;
-	int g_y = ((32 - (imageRGBA.rows % 32)) + imageRGBA.rows) / 32;
+	int g_x = ((BLOCK_X - (imageRGBA.cols % BLOCK_X)) + imageRGBA.cols) / BLOCK_X;
+	int g_y = ((BLOCK_Y - (imageRGBA.rows % BLOCK_Y)) + imageRGBA.rows) / BLOCK_Y;
 
-	int b_x = 32;
-	int b_y = 32; //Max Threads per block is 1024, so 32x32
+	int b_x = BLOCK_X;
+	int b_y = BLOCK_Y; //Max Threads per block is 1024, so 32x32
 
 	//Ready to launch the kernel
 	GpuTimer timer;
@@ -133,6 +151,16 @@ int main(int argc, char **argv)
 	cv::Mat output(imageRGBA.rows, imageRGBA.cols, CV_8UC1, (void *)h_imgGrey);
 	//output the image
 	cv::imwrite(output_filename.c_str(), output);
+	
+	/*
+	//Compare with OpenCV inbuilt conversion
+	clock_t t = clock();
+	cv::cvtColor(image, imageGrey, CV_BGR2GRAY);
+	t = clock() - t;
+	std::cout << "Time for OpenCV to convert the image: " << ((float)t)/CLOCKS_PER_SEC << std::endl;
+	cv::imwrite((std::string("output_ocv.jpg")).c_str(), imageGrey);
+	//Comment when used.
+	*/
 
 	//Free all the memory
 	cudaFree(d_imgRGBA);
